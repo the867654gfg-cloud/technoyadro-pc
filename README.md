@@ -1,0 +1,1 @@
+# technoyadro-pc
