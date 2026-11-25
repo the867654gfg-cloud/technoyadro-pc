@@ -1,0 +1,36 @@
+name: TechnoYadro app checks
+on:
+  push:
+    branches: [main]
+    paths: ['index.html', '.github/workflows/technoyadro-ci.yml']
+  workflow_dispatch:
+  schedule:
+    - cron: '15 6 * * *'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate HTML and JavaScript syntax
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import vm from 'node:vm';
+          const html=fs.readFileSync('index.html','utf8');
+          if(!html.includes('telegram.org/js/telegram-web-app.js')) throw Error('Telegram SDK missing');
+          if(!html.includes('Конфигуратор ПК')) throw Error('App title missing');
+          const scripts=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(x=>x[1]).filter(s=>s.trim());
+          if(scripts.length<3)throw Error('App scripts missing');
+          scripts.forEach((s,i)=>new vm.Script(s,{filename:'inline-'+i+'.js'}));
+          console.log('Parsed '+scripts.length+' inline scripts; no browser execution.');
+          JS
+      - name: Check public app on scheduled or manual runs
+        if: github.event_name != 'push'
+        run: |
+          curl --fail --silent --show-error --max-time 30 --retry 1 https://the867654gfg-cloud.github.io/technoyadro-pc/ -o /tmp/technoyadro.html
+          grep -q 'Конфигуратор ПК' /tmp/technoyadro.html
+          grep -q 'telegram.org/js/telegram-web-app.js' /tmp/technoyadro.html
+          echo 'HTTP content check passed; Telegram runtime still requires device test.'
