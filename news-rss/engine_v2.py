@@ -32,6 +32,8 @@ STOP = set("a an the and for of to on in with is are as at by from new its has h
 USER_AGENT = "TechnoYadroRSS/2.0"
 MAX_EXCERPT = 600
 MAX_ARTICLES = 8
+# Reject oversized bodies instead of silently truncating editorial evidence.
+MAX_EVIDENCE_CHARS = 50000
 MAX_BYTES = 1_500_000
 
 class Plain(HTMLParser):
@@ -118,6 +120,17 @@ def host_of(url):
 KNOWN_HOSTS={host_of(home) for _,home,_ in SOURCES}
 KNOWN_HOSTS.update({"arstechnica.com","www.arstechnica.com","techpowerup.com","www.techpowerup.com","tomshardware.com","www.tomshardware.com","bleepingcomputer.com","www.bleepingcomputer.com","amd.com","www.amd.com","nvidia.com","www.nvidia.com","cisa.gov","www.cisa.gov"})
 KNOWN_HOSTS.discard(None)
+# Explicit publisher identity mapping; approval alone cannot turn a media outlet
+# or a cross-domain link into an official primary source.
+OFFICIAL_HOSTS = {name: {host_of(home), *(host_of(u) for u in feeds)}
+                  for name, home, feeds in SOURCES if name in OFFICIAL}
+OFFICIAL_HOSTS['AMD'].update({'amd.com','www.amd.com'})
+OFFICIAL_HOSTS['NVIDIA'].update({'nvidia.com','www.nvidia.com'})
+OFFICIAL_HOSTS['CISA News'].update({'cisa.gov','www.cisa.gov'})
+
+def official_url(source, url, approved):
+    host = host_of(url)
+    return host is not None and host in approved and host in OFFICIAL_HOSTS.get(source, set())
 
 def safe_url(url,hosts):
     return host_of(url) in hosts
@@ -167,6 +180,7 @@ def extract(row,approved):
     url=row["url"]
     host=host_of(url)
     if host not in approved: return {"status":"not_approved"}
+    if not official_url(row["source"],url,approved): return {"status":"not_official"}
     hosts={host}
     try:
         robots=fetch_html("https://"+host+"/robots.txt",hosts,"robots")
@@ -182,8 +196,14 @@ def extract(row,approved):
         if parser.restricted or re.search(r"\b(subscribe to continue|sign in to continue|subscriber.only|members.only)\b",body,re.I):
             return {"status":"restricted"}
         if len(body)<250: return {"status":"insufficient_text"}
-        # Never persist the entire article. Extract only a bounded evidence preview.
-        return {"status":"excerpt_only","excerpt":body[:MAX_EXCERPT],"characters_read":len(body)}
+        # Approval must cover automated access and temporary storage/sharing in
+        # the existing one-day artifact of this public repository.
+        # Extraction is not proof of completeness, authorship or factual accuracy.
+        if len(body)>MAX_EVIDENCE_CHARS: return {"status":"oversized_text"}
+        return {"status":"official_text_for_review","text":body,
+                "excerpt":body[:MAX_EXCERPT],"characters_read":len(body),
+                "source_url":url,"format":"html_article_or_main",
+                "completeness_verified":False}
     except Exception as exc:
         return {"status":"unavailable","reason":type(exc).__name__}
 
@@ -223,8 +243,14 @@ def run(approved):
         lead["distinct_reporting_sources"]=len(set(r["source"] for r in g))
         # Similar titles across outlets do not establish independent confirmation.
         lead["independent_confirmation"]=False
-        if budget and host_of(lead["url"]) in approved:
-            lead["article"]=extract(lead,approved)
+        # Prefer an approved primary source within the cluster, even when
+        # a secondary report ranks higher. Keep its own provenance.
+        primary=next((r for r in g if official_url(r["source"],r["url"],approved)),None)
+        if budget and primary:
+            lead["article"]=extract(primary,approved)
+            lead["article"]["source"]=primary["source"]
+            lead["article"]["source_url"]=primary["url"]
+            lead["article"]["published_utc"]=primary["published_utc"]
             budget-=1
         else: lead["article"]={"status":"not_approved_or_budget"}
         shortlist.append(lead)
@@ -233,6 +259,7 @@ def run(approved):
         "successful_sources":ok,"total_sources":len(SOURCES),"sources":reports,
         "unique_candidates":len(rows),"filtered_candidates":len(rows)-len(eligible),
         "clusters":len(groups),"approved_article_hosts":sorted(approved),
+        "official_texts_for_review":sum(r["article"]["status"]=="official_text_for_review" for r in shortlist),
         "verified_articles":False,"publication_allowed":False,"shortlist":shortlist}
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -279,11 +306,26 @@ class Tests(unittest.TestCase):
     def test_restrictions(self):
         with patch(__name__+".fetch_html",side_effect=["User-agent: *\nAllow: /",'<meta name="robots" content="nosnippet"><article>'+"x"*700+"</article>"]):
             self.assertEqual(extract(self.row,{"www.amd.com"})["status"],"restricted")
-    def test_bounded_article(self):
+    def test_full_article_for_review(self):
         with patch(__name__+".fetch_html",side_effect=["User-agent: *\nAllow: /","<article>"+"x"*700+"</article>"]):
             r=extract(self.row,{"www.amd.com"})
-            self.assertEqual(r["status"],"excerpt_only")
+            self.assertEqual(r["status"],"official_text_for_review")
+            self.assertEqual(r["text"],"x"*700)
             self.assertEqual(len(r["excerpt"]),600)
+            self.assertFalse(r["completeness_verified"])
+    def test_nonofficial_approved_host(self):
+        row=dict(self.row,source="Ars Technica",url="https://arstechnica.com/test")
+        with patch(__name__+".fetch_html") as f:
+            self.assertEqual(extract(row,{"arstechnica.com"})["status"],"not_official")
+            f.assert_not_called()
+    def test_cross_source_host(self):
+        row=dict(self.row,url="https://nvidianews.nvidia.com/test")
+        with patch(__name__+".fetch_html") as f:
+            self.assertEqual(extract(row,{"nvidianews.nvidia.com"})["status"],"not_official")
+            f.assert_not_called()
+    def test_oversized_article(self):
+        with patch(__name__+".fetch_html",side_effect=["User-agent: *\nAllow: /","<article>"+"x"*(MAX_EVIDENCE_CHARS+1)+"</article>"]):
+            self.assertEqual(extract(self.row,{"www.amd.com"})["status"],"oversized_text")
 
 if __name__=="__main__":
     if "--test" in sys.argv:
