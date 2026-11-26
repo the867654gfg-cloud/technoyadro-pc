@@ -15,10 +15,9 @@ from unittest.mock import patch
 import collector as base
 
 SOURCES = base.SOURCES + [
-    ("Intel Newsroom", "https://newsroom.intel.com/", ["https://newsroom.intel.com/feed/"]),
     ("Tom's Hardware", "https://www.tomshardware.com/", ["https://www.tomshardware.com/feeds/all"]),
 ]
-OFFICIAL = {"AMD","NVIDIA","Microsoft","Intel Newsroom","Samsung Mobile","CISA News","USB-IF","Android Developers Blog","MIT News - Computer Science"}
+OFFICIAL = {"AMD","NVIDIA","Microsoft","Samsung Mobile","CISA News","USB-IF","Android Developers Blog"}
 TOPICS = {
     "hardware": r"\b(cpu|gpu|ryzen|radeon|geforce|intel|nvidia|amd|ssd|nvme|ddr[456]|motherboard|processor|graphics|memory|chipset|pcie|ram)\b",
     "security": r"\b(cve-\d{4}-\d+|vulnerability|vulnerabilities|ransomware|malware|security|exploit|patch)\b",
