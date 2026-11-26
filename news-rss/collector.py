@@ -16,7 +16,6 @@ SOURCES = [
     ("Android Developers Blog", "https://android-developers.googleblog.com/", ["https://android-developers.googleblog.com/feeds/posts/default"]),
     ("Ars Technica", "https://arstechnica.com/", ["https://feeds.arstechnica.com/arstechnica/index"]),
     ("AppleInsider", "https://appleinsider.com/", ["https://appleinsider.com/rss/news/"]),
-    ("MIT News - Computer Science", "https://news.mit.edu/topic/computer-science", ["https://news.mit.edu/rss/topic/computer-science"]),
     ("NVIDIA", "https://nvidianews.nvidia.com/", ["https://nvidianews.nvidia.com/rss"]),
     ("AMD", "https://www.amd.com/en/newsroom.html", ["https://www.amd.com/en/newsroom/rss.xml"]),
     ("Phoronix", "https://www.phoronix.com/", ["https://www.phoronix.com/rss.php"]),
