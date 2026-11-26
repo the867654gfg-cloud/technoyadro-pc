@@ -1,0 +1,7 @@
+# TechnoYadro News Engine 2.0 pilot
+
+Separate manual workflow, not a replacement for hourly RSS. 15 configured feeds (13 existing + Intel and Tom's Hardware); new endpoints are candidates, not verified. Ranking and title clustering are heuristic; cross-source similarity does not establish independent confirmation. All candidates are marked UNVERIFIED and not publication-ready. RSS descriptions and article evidence are limited to 600 characters per item; no full article archive or paid API. Article fetch is opt-in only for exact approved hosts after publisher permissions have been checked; robots and restriction checks are additional controls, not permission by themselves. No automatic publisher or secrets.
+
+Manual run: Actions > TechnoYadro News Engine 2.0 (pilot) > Run workflow, main, leave approved_article_hosts blank for initial RSS-only pilot. The baseline and new offline tests must pass before collecting. Download artifact technoyadro-news-v2 (one-day retention), inspect news-v2.json. Do not publish solely on title or partial excerpt. The existing editorial job can read the artifact after validation and must keep the existing approval gate. The stable index.html and hourly workflow are unchanged.
+
+Implementation deliberately uses Python standard library; no external dependencies. Article extraction is limited to semantic article/main markup and may fail on JS pages, complex layouts, paywalls or restrictions. No circumvention. A full-source check and independent confirmation remain editorial steps.
