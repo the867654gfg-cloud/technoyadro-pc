@@ -32,9 +32,11 @@ jobs:
         run: python3 news-rss/collector.py --test
       - name: Test News Engine 2.0
         run: python3 news-rss/engine_v2.py --test
+      # Scheduled/push runs use the repository variable only after publisher permission is documented.
+      # Manual runs keep their explicit input; an empty input remains RSS-only.
       - name: Collect and rank
         env:
-          APPROVED_ARTICLE_HOSTS: ${{ inputs.approved_article_hosts }}
+          APPROVED_ARTICLE_HOSTS: ${{ github.event_name != 'workflow_dispatch' && vars.TECHNOYADRO_APPROVED_ARTICLE_HOSTS || inputs.approved_article_hosts }}
         run: python3 news-rss/engine_v2.py
       - name: Upload short-lived evidence
         if: always()
