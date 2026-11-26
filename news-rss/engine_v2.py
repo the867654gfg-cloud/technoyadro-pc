@@ -239,7 +239,7 @@ def extract(row,approved):
                 "source_url":url,"format":"html_article_or_main",
                 "completeness_verified":False}
     except Exception as exc:
-        return {"status":"unavailable","reason":type(exc).__name__}
+        return {"status":"unavailable","reason":type(exc).__name__,"http_status":getattr(exc,"code",None)}
 
 def run(approved):
     now=dt.datetime.now(base.UTC)
@@ -280,7 +280,7 @@ def run(approved):
             lead["article"]["source_url"]=primary["url"]
             lead["article"]["published_utc"]=primary["published_utc"]
             budget-=1
-        else: lead["article"]={"status":"not_approved_or_budget"}
+        else: lead["article"]={"status":"budget_exhausted" if primary else "no_approved_primary"}
         shortlist.append(lead)
     ok=sum(s["status"]=="ok" for s in reports)
     result={"schema_version":2,"collected_utc":now.isoformat(),"window_hours":24,
@@ -292,7 +292,7 @@ def run(approved):
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     print("Coverage:",ok,"/",len(SOURCES),"Candidates:",len(rows),"Clusters:",len(groups),"Shortlist:",len(shortlist))
-    if ok==0: raise SystemExit("All feeds unavailable")
+    if ok<10: raise SystemExit(f"Insufficient RSS coverage: {ok}/10 required")
 
 class Tests(unittest.TestCase):
     def setUp(self):
