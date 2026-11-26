@@ -161,8 +161,8 @@ def main():
     print("RSS source coverage:",ok,"/",len(SOURCES),"Unique candidate URLs:",len(rows))
     for s in reports:
         print(s["source"],s["status"],s.get("fresh","-"))
-    if ok == 0:
-        raise SystemExit("All feeds unavailable")
+    if ok < 10:
+        raise SystemExit(f"Insufficient RSS coverage: {ok}/10 required")
 
 class Tests(unittest.TestCase):
     def setUp(self):
