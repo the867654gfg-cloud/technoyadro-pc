@@ -27,7 +27,7 @@ TOPICS = {
     "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm)\b",
 }
 RUMOR = re.compile(r"\b(rumou?rs?|leaks?|leaked|reportedly|unconfirmed|alleged|speculation)\b",re.I)
-AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway)\b",re.I)
+AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway|price index|lowest prices?|all-time low|for just\s+\$|gift guide|best deals)\b|\b(?:for just|at)\s+\$\d",re.I)
 STOP = set("a an the and for of to on in with is are as at by from new its has have it this that be will can says report".split())
 USER_AGENT = "TechnoYadroRSS/2.0"
 MAX_EXCERPT = 600
@@ -54,8 +54,34 @@ def excerpt(s):
     p.feed(s[:15000])
     return p.result()[:MAX_EXCERPT]
 
-def enriched_parse(data,source,base_url,now):
-    rows,unknown=base.parse(data,source,base_url,now)
+def rss_body(entry):
+    """Read an explicit content field, never upgrade a summary to full text."""
+    for c in entry:
+        is_rss=c.tag=="{http://purl.org/rss/1.0/modules/content/}encoded"
+        is_atom=c.tag=="{http://www.w3.org/2005/Atom}content"
+        if not (is_rss or is_atom) or c.get("src"): continue
+        typ=c.get("type","text" if is_atom else "html")
+        if typ not in ("text","html","xhtml"): continue
+        if typ=="xhtml":
+            import xml.etree.ElementTree as ET
+            raw="".join(ET.tostring(x,encoding="unicode") for x in c)
+        else:
+            if len(c): continue
+            raw=c.text or ""
+        if len(raw)>MAX_BYTES: return None
+        if typ=="text":
+            body=" ".join(raw.split())
+        else:
+            parser=Plain()
+            parser.feed(raw)
+            body=parser.result()
+        if 250<=len(body)<=MAX_EVIDENCE_CHARS:
+            return body
+    return None
+
+def enriched_parse(data,source,base_url,now,approved=None,parse=None):
+    rows,unknown=(parse or base.parse)(data,source,base_url,now)
+    approved=approved or set()
     import xml.etree.ElementTree as ET
     notes={}
     for e in ET.fromstring(data).iter():
@@ -66,10 +92,18 @@ def enriched_parse(data,source,base_url,now):
                 if link:
                     url=base.normalize(up.urljoin(base_url,link))
                     if url:
-                        notes[url]=excerpt(base.value(e,"description","summary"))
+                        note={"rss_excerpt":excerpt(base.value(e,"description","summary"))}
+                        # Both feed and article must be explicitly approved for
+                        # automated access AND temporary text sharing.
+                        if official_url(source,base_url,approved) and official_url(source,url,approved):
+                            body=rss_body(e)
+                            if body:
+                                note["_rss_body"]=body
+                                note["_rss_feed"]=base_url
+                        notes[url]=note
                     break
     for r in rows:
-        r["rss_excerpt"]=notes.get(r["url"],"")
+        r.update(notes.get(r["url"],{"rss_excerpt":""}))
     return rows,unknown
 
 def tokens(s):
@@ -213,20 +247,7 @@ def run(approved):
     original=base.parse
     # Avoid recursion: wrapper calls the saved parser; base.collect_one uses global parse.
     def wrapped(data,source,base_url,when):
-        rows,unknown=original(data,source,base_url,when)
-        import xml.etree.ElementTree as ET
-        notes={}
-        for e in ET.fromstring(data).iter():
-            if base.local(e.tag) not in ("entry","item"): continue
-            for c in e:
-                if base.local(c.tag)=="link" and c.get("rel","alternate")=="alternate":
-                    link=(c.get("href") or c.text or "").strip()
-                    if link:
-                        u=base.normalize(up.urljoin(base_url,link))
-                        if u: notes[u]=excerpt(base.value(e,"description","summary"))
-                        break
-        for r in rows: r["rss_excerpt"]=notes.get(r["url"],"")
-        return rows,unknown
+        return enriched_parse(data,source,base_url,when,approved,original)
     base.parse=wrapped
     try:
         with cf.ThreadPoolExecutor(max_workers=4) as pool:
@@ -238,7 +259,7 @@ def run(approved):
     shortlist=[]
     budget=MAX_ARTICLES
     for g in groups[:15]:
-        lead=dict(g[0])
+        lead={k:v for k,v in g[0].items() if k not in ("_rss_body","_rss_feed")}
         lead["related_candidates"]=[{"source":r["source"],"url":r["url"],"title":r["title"],"rss_excerpt":r["rss_excerpt"]} for r in g[1:4]]
         lead["distinct_reporting_sources"]=len(set(r["source"] for r in g))
         # Similar titles across outlets do not establish independent confirmation.
@@ -247,7 +268,14 @@ def run(approved):
         # a secondary report ranks higher. Keep its own provenance.
         primary=next((r for r in g if official_url(r["source"],r["url"],approved)),None)
         if budget and primary:
-            lead["article"]=extract(primary,approved)
+            if primary.get("_rss_body"):
+                body=primary["_rss_body"]
+                lead["article"]={"status":"official_text_for_review","text":body,
+                    "excerpt":body[:MAX_EXCERPT],"characters_read":len(body),
+                    "format":"rss_explicit_content","feed_url":primary["_rss_feed"],
+                    "completeness_verified":False}
+            else:
+                lead["article"]=extract(primary,approved)
             lead["article"]["source"]=primary["source"]
             lead["article"]["source_url"]=primary["url"]
             lead["article"]["published_utc"]=primary["published_utc"]
@@ -290,6 +318,23 @@ class Tests(unittest.TestCase):
         raw=b'<rss><channel><item><title>CPU patch</title><link>https://example.com/a</link><pubDate>Thu, 26 Nov 2026 11:00:00 GMT</pubDate><description>&lt;p&gt;Fix&lt;/p&gt;</description></item></channel></rss>'
         rows,_=enriched_parse(raw,"test","https://example.com/",self.now)
         self.assertEqual(rows[0]["rss_excerpt"],"Fix")
+    def test_rss_full_content_requires_both_approvals(self):
+        raw=('<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item>'
+             '<title>CPU patch</title><link>https://www.amd.com/test</link>'
+             '<pubDate>Thu, 26 Nov 2026 11:00:00 GMT</pubDate><description>Summary</description>'
+             '<content:encoded><![CDATA[<p>'+"x"*1000+'</p>]]></content:encoded></item></channel></rss>').encode()
+        for hosts in (set(),{"www.amd.com"},{"amd.com"}):
+            rows,_=enriched_parse(raw,"AMD","https://amd.com/feed",self.now,hosts)
+            self.assertNotIn("_rss_body",rows[0])
+        rows,_=enriched_parse(raw,"AMD","https://amd.com/feed",self.now,{"amd.com","www.amd.com"})
+        self.assertEqual(rows[0]["_rss_body"],"x"*1000)
+        self.assertEqual(rows[0]["rss_excerpt"],"Summary")
+    def test_rss_summary_not_full(self):
+        import xml.etree.ElementTree as ET
+        self.assertIsNone(rss_body(ET.fromstring("<item><description>"+"x"*1000+"</description></item>")))
+    def test_commercial_price_titles(self):
+        for title in ("CPU Price Index 2026","Get an RTX GPU for just $1,141","AMD Ryzen CPU at an all-time low"):
+            self.assertIn("commercial",rank(dict(self.row,title=title),self.now)["flags"])
     def test_url(self):
         hosts={"www.amd.com"}
         for u in ("http://www.amd.com/a","https://www.amd.com.evil.test/a","https://www.amd.com:123/a","https://user@www.amd.com/a"):
