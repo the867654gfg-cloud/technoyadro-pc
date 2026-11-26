@@ -1,0 +1,38 @@
+name: TechnoYadro News Engine 2.0 (pilot)
+on:
+  workflow_dispatch:
+    inputs:
+      approved_article_hosts:
+        description: 'Comma-separated hosts with verified publisher permission; leave empty for RSS-only'
+        required: false
+        default: ''
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: technoyadro-news-v2
+  cancel-in-progress: true
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test baseline RSS
+        run: python3 news-rss/collector.py --test
+      - name: Test News Engine 2.0
+        run: python3 news-rss/engine_v2.py --test
+      - name: Collect and rank
+        env:
+          APPROVED_ARTICLE_HOSTS: ${{ inputs.approved_article_hosts }}
+        run: python3 news-rss/engine_v2.py
+      - name: Upload short-lived evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: technoyadro-news-v2
+          path: rss-output/news-v2.json
+          retention-days: 1
+          if-no-files-found: warn
