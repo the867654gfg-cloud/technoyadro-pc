@@ -26,8 +26,8 @@ TOPICS = {
     "engineering": r"\b(usb|pcie|pci express|semiconductor|transistor|power delivery|cooling|architecture|chip|silicon)\b",
     "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm)\b",
 }
-RUMOR = re.compile(r"\b(rumou?rs?|leaks?|leaked|reportedly|unconfirmed|alleged|speculation)\b",re.I)
-AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway|price index|lowest prices?|all-time low|for just\s+\$|gift guide|best deals)\b|\b(?:for just|at)\s+\$\d",re.I)
+RUMOR = re.compile(r"\b(rumou?rs?|leaks?|leaked|reportedly|unconfirmed|alleged|speculation|purported|report claims)\b",re.I)
+AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway|price index|lowest prices?|all-time low|for just\s+\$|gift guide|best deals|save\s+\d+\s*%|\d+\s*%\s+off)\b|\b(?:for just|at)\s+\$\d",re.I)
 STOP = set("a an the and for of to on in with is are as at by from new its has have it this that be will can says report".split())
 USER_AGENT = "TechnoYadroRSS/2.0"
 MAX_EXCERPT = 600
@@ -335,6 +335,9 @@ class Tests(unittest.TestCase):
     def test_commercial_price_titles(self):
         for title in ("CPU Price Index 2026","Get an RTX GPU for just $1,141","AMD Ryzen CPU at an all-time low"):
             self.assertIn("commercial",rank(dict(self.row,title=title),self.now)["flags"])
+    def test_additional_headline_filters(self):
+        self.assertIn("commercial",rank(dict(self.row,title="Save 21% on this SSD"),self.now)["flags"])
+        self.assertIn("rumor",rank(dict(self.row,title="GPU shipments stopped, report claims"),self.now)["flags"])
     def test_url(self):
         hosts={"www.amd.com"}
         for u in ("http://www.amd.com/a","https://www.amd.com.evil.test/a","https://www.amd.com:123/a","https://user@www.amd.com/a"):
