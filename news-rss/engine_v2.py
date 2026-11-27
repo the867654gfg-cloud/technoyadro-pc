@@ -2,6 +2,7 @@
 import concurrent.futures as cf
 import datetime as dt
 import difflib
+import html
 import json
 import re
 import sys
@@ -14,20 +15,38 @@ from pathlib import Path
 from unittest.mock import patch
 import collector as base
 
+FEED_OVERRIDES = {
+    "Android Developers Blog": ("https://developer.android.com/blog/", ["https://developer.android.com/static/blog/atom.xml"]),
+    "AMD": ("https://ir.amd.com/news-events/press-releases", ["https://ir.amd.com/news-events/press-releases/rss", "https://www.amd.com/en/newsroom/rss.xml"]),
+    "NVIDIA": ("https://nvidianews.nvidia.com/", ["https://nvidianews.nvidia.com/rss.xml"]),
+}
 SOURCES = [
-    (name, "https://developer.android.com/blog/", ["https://developer.android.com/static/blog/atom.xml"])
-    if name == "Android Developers Blog" else (name, home, feeds)
+    (name, *FEED_OVERRIDES.get(name, (home, feeds)))
     for name, home, feeds in base.SOURCES
 ] + [
     ("Tom's Hardware", "https://www.tomshardware.com/", ["https://www.tomshardware.com/feeds/all"]),
+    ("OpenAI", "https://openai.com/news/", ["https://openai.com/news/rss.xml"]),
+    ("Google AI", "https://blog.google/innovation-and-ai/technology/ai/", ["https://blog.google/innovation-and-ai/technology/ai/rss/"]),
+    ("NVIDIA Blog", "https://blogs.nvidia.com/", ["https://blogs.nvidia.com/feed/"]),
+    ("Raspberry Pi", "https://www.raspberrypi.com/news/", ["https://www.raspberrypi.com/news/feed/"]),
+    ("GitHub Changelog", "https://github.blog/changelog/", ["https://github.blog/changelog/feed/"]),
 ]
-OFFICIAL = {"AMD","NVIDIA","Microsoft","Samsung Mobile","CISA News","USB-IF","Android Developers Blog"}
+NEWSROOMS = {
+    "Anthropic": "https://www.anthropic.com/news",
+    "Apple Newsroom": "https://www.apple.com/newsroom/archive/",
+    "Intel Newsroom": "https://www.intel.com/content/www/us/en/newsroom/home.html",
+}
+OFFICIAL = {
+    "AMD", "NVIDIA", "Microsoft", "Samsung Mobile", "CISA News", "USB-IF",
+    "Android Developers Blog", "OpenAI", "Google AI", "NVIDIA Blog",
+    "Raspberry Pi", "GitHub Changelog", *NEWSROOMS,
+}
 TOPICS = {
-    "hardware": r"\b(cpu|gpu|ryzen|radeon|geforce|intel|nvidia|amd|ssd|nvme|ddr[456]|motherboard|processor|graphics|memory|chipset|pcie|ram)\b",
+    "hardware": r"\b(cpu|gpu|ryzen|radeon|geforce|intel|nvidia|amd|ssd|nvme|ddr[456]|motherboard|processor|graphics|memory|chipset|pcie|ram|raspberry pi|iphone|ipad|macbook)\b",
     "security": r"\b(cve-\d{4}-\d+|vulnerability|vulnerabilities|ransomware|malware|security|exploit|patch)\b",
-    "software": r"\b(windows|linux|kernel|driver|firmware|uefi|bios|mesa|android|macos|update)\b",
+    "software": r"\b(windows|linux|kernel|driver|firmware|uefi|bios|mesa|android|macos|ios|github|update)\b",
     "engineering": r"\b(usb|pcie|pci express|semiconductor|transistor|power delivery|cooling|architecture|chip|silicon)\b",
-    "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm)\b",
+    "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm|chatgpt|gpt[- ]?\d+|codex|claude|gemini|copilot)\b",
 }
 RUMOR = re.compile(r"\b(rumou?rs?|leaks?|leaked|reportedly|unconfirmed|alleged|speculation|purported|report claims)\b",re.I)
 AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway|price index|lowest prices?|all-time low|for just\s+\$|gift guide|best deals)\b|\bsave\s+\d+\s*%|\b\d+\s*%\s+off\b|\b(?:for just|at)\s+\$\d",re.I)
@@ -154,13 +173,15 @@ def host_of(url):
         return p.hostname.lower() if p.hostname else None
     except ValueError: return None
 
-KNOWN_HOSTS={host_of(home) for _,home,_ in SOURCES}
+KNOWN_HOSTS = {host_of(home) for _, home, _ in SOURCES}
+KNOWN_HOSTS.update(host_of(url) for url in NEWSROOMS.values())
 KNOWN_HOSTS.update({"arstechnica.com","www.arstechnica.com","techpowerup.com","www.techpowerup.com","tomshardware.com","www.tomshardware.com","bleepingcomputer.com","www.bleepingcomputer.com","amd.com","www.amd.com","nvidia.com","www.nvidia.com","cisa.gov","www.cisa.gov"})
 KNOWN_HOSTS.discard(None)
 # Explicit publisher identity mapping; approval alone cannot turn a media outlet
 # or a cross-domain link into an official primary source.
 OFFICIAL_HOSTS = {name: {host_of(home), *(host_of(u) for u in feeds)}
                   for name, home, feeds in SOURCES if name in OFFICIAL}
+OFFICIAL_HOSTS.update({name: {host_of(url)} for name, url in NEWSROOMS.items()})
 OFFICIAL_HOSTS['AMD'].update({'amd.com','www.amd.com'})
 OFFICIAL_HOSTS['NVIDIA'].update({'nvidia.com','www.nvidia.com','blogs.nvidia.com'})
 OFFICIAL_HOSTS['CISA News'].update({'cisa.gov','www.cisa.gov'})
@@ -255,6 +276,71 @@ def extract(row,approved):
     except Exception as exc:
         return {"status":"unavailable","reason":type(exc).__name__,"http_status":getattr(exc,"code",None)}
 
+# These newsrooms expose publication days without reliable publication times.
+# Keep them out of the rolling 24-hour shortlist and report their dates as shown.
+NEWSROOM_CARD_PATTERNS = {
+    "Anthropic": re.compile(
+        r'<a class="[^"]*?_title-link" href="(?P<link>[^"]+)"[^>]*>'
+        r'[^<]*(?:(?!</a>).)*?<h3[^>]*>(?P<title>.*?)</h3>.*?</a>'
+        r'(?:(?!<div class="[^"]*?_details").)*?<time[^>]*>(?P<date>[^<]+)</time>',
+        re.S,
+    ),
+    "Apple Newsroom": re.compile(
+        r'<a href="(?P<link>/newsroom/\d{4}/\d{2}/[^"]+)" class="result__item row-anchor"[^>]*>'
+        r'(?:(?!</a>).)*?<h3 class="item__headline">(?P<title>.*?)</h3>\s*'
+        r'<p class="item__date">(?P<date>[^<]+)</p>',
+        re.S,
+    ),
+    "Intel Newsroom": re.compile(
+        r'<a class="cmp-teaser__link" href="(?P<link>/content/www/us/en/newsroom/[^"]+)"[^>]*>'
+        r'(?:(?!</a>).)*?<h2 class="cmp-teaser__title">(?P<title>.*?)</h2>\s*'
+        r'<div class="cmp-teaser__description">\s*<p>(?P<date>[^<]+)</p>',
+        re.S,
+    ),
+}
+
+
+def parse_newsroom(source, page, url):
+    articles = {}
+    for match in NEWSROOM_CARD_PATTERNS[source].finditer(page):
+        link, title, day = match.group("link", "title", "date")
+        link = base.normalize(up.urljoin(url, html.unescape(link)))
+        if not link or not publisher_url(source, link):
+            continue
+        parsed_day = re.fullmatch(r"([A-Za-z]{3})[A-Za-z]* (\d{1,2}), (\d{4})", day.strip())
+        if not parsed_day:
+            continue
+        try:
+            published = dt.datetime.strptime(" ".join(parsed_day.groups()), "%b %d %Y").date()
+        except ValueError:
+            continue
+        articles[link] = {
+            "source": source, "title": excerpt(title), "url": link,
+            "published_date": published.isoformat(),
+        }
+    return list(articles.values())
+
+
+def collect_newsroom(spec, now):
+    source, url = spec
+    try:
+        raw, actual = base.get(url)
+        if not publisher_url(source, actual):
+            raise ValueError("Newsroom redirected outside its official host")
+        articles = parse_newsroom(source, raw.decode("utf-8", errors="replace"), actual)
+        if not articles:
+            raise ValueError("No dated newsroom entries found")
+    except (OSError, ValueError) as exc:
+        return {"source": source, "status": "failed", "errors": [str(exc)[:140]], "items": []}
+
+    # Calendar dates have no timezone or time of day. Show today and yesterday
+    # for editorial review without assigning a timestamp or marking them fresh.
+    dates = {now.date().isoformat(), (now.date() - dt.timedelta(days=1)).isoformat()}
+    rows = [row for row in articles if row["title"] and row["published_date"] in dates
+            and not (RUMOR.search(row["title"]) or AD.search(row["title"]))]
+    return {"source": source, "status": "ok", "index": actual, "dated": len(rows), "items": rows}
+
+
 def run(approved):
     now=dt.datetime.now(base.UTC)
     # Use the proven RSS collector without editing its source file.
@@ -265,7 +351,10 @@ def run(approved):
     base.parse=wrapped
     try:
         with cf.ThreadPoolExecutor(max_workers=4) as pool:
-            reports=list(pool.map(lambda spec:base.collect_one(spec,now),SOURCES))
+            feeds = [pool.submit(base.collect_one, spec, now) for spec in SOURCES]
+            newsrooms = [pool.submit(collect_newsroom, spec, now) for spec in NEWSROOMS.items()]
+            reports = [job.result() for job in feeds]
+            newsroom_reports = [job.result() for job in newsrooms]
     finally: base.parse=original
     rows=[rank(r,now) for r in base.dedup([r for s in reports for r in s.pop("items")])]
     eligible=[r for r in rows if not r["flags"]]
@@ -296,18 +385,22 @@ def run(approved):
             budget-=1
         else: lead["article"]={"status":"budget_exhausted" if primary else "no_approved_primary"}
         shortlist.append(lead)
-    ok=sum(s["status"]=="ok" for s in reports)
+    dated = [row for report in newsroom_reports for row in report.pop("items")]
+    rss_ok = sum(s["status"] == "ok" for s in reports)
+    reports.extend(newsroom_reports)
+    ok = sum(s["status"] == "ok" for s in reports)
     result={"schema_version":2,"collected_utc":now.isoformat(),"window_hours":24,
-        "successful_sources":ok,"total_sources":len(SOURCES),"sources":reports,
+        "successful_sources":ok,"total_sources":len(reports),"sources":reports,
         "unique_candidates":len(rows),"filtered_candidates":len(rows)-len(eligible),
         "clusters":len(groups),"approved_article_hosts":sorted(approved),
         "official_texts_for_review":sum(r["article"]["status"]=="official_text_for_review" for r in shortlist),
         "verified_articles":False,"publication_allowed":False,"shortlist":shortlist,
-        "official_candidates":official_candidates(eligible)}
+        "official_candidates":official_candidates(eligible),
+        "official_dated_candidates":sorted(dated, key=lambda row: row["published_date"], reverse=True)}
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
-    print("Coverage:",ok,"/",len(SOURCES),"Candidates:",len(rows),"Clusters:",len(groups),"Shortlist:",len(shortlist))
-    if ok<10: raise SystemExit(f"Insufficient RSS coverage: {ok}/10 required")
+    print("Coverage:",ok,"/",len(reports),"Candidates:",len(rows),"Clusters:",len(groups),"Shortlist:",len(shortlist))
+    if rss_ok<10: raise SystemExit(f"Insufficient RSS coverage: {rss_ok}/10 required")
 
 class Tests(unittest.TestCase):
     def setUp(self):
@@ -374,6 +467,35 @@ class Tests(unittest.TestCase):
         self.assertEqual(candidates[0]["url"], official["url"])
         self.assertNotIn("_rss_body", candidates[0])
         self.assertFalse(official_url("NVIDIA", official["url"], set()))
+
+    def test_newsroom_dates_remain_separate_from_publication_times(self):
+        cards = {
+            "Anthropic": (
+                '<a class="card_title-link" href="/news/example"><span><h3>Claude &amp; Codex</h3>'
+                '</span></a><div class="card_date"><time>Nov 26, 2026</time></div>'
+            ),
+            "Apple Newsroom": (
+                '<a href="/newsroom/2026/11/example/" class="result__item row-anchor">'
+                '<h3 class="item__headline">iPhone release</h3>'
+                '<p class="item__date">November 26, 2026</p></a>'
+            ),
+            "Intel Newsroom": (
+                '<a class="cmp-teaser__link" href="/content/www/us/en/newsroom/news/example.html">'
+                '<h2 class="cmp-teaser__title">Intel release</h2>'
+                '<div class="cmp-teaser__description"><p>November 26, 2026</p></div></a>'
+            ),
+        }
+        for source, card in cards.items():
+            with self.subTest(source=source):
+                url = NEWSROOMS[source]
+                with patch.object(base, "get", return_value=(card.encode(), url)):
+                    report = collect_newsroom((source, url), self.now)
+                    self.assertEqual(report["status"], "ok")
+                    self.assertEqual(report["dated"], 1)
+                    self.assertEqual(report["items"][0]["published_date"], "2026-11-26")
+                    self.assertNotIn("published_utc", report["items"][0])
+                    stale = collect_newsroom((source, url), self.now + dt.timedelta(days=2))
+                    self.assertEqual(stale["items"], [])
 
     def test_no_permission(self):
         with patch(__name__+".fetch_html") as f:
