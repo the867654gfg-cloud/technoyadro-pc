@@ -162,12 +162,23 @@ KNOWN_HOSTS.discard(None)
 OFFICIAL_HOSTS = {name: {host_of(home), *(host_of(u) for u in feeds)}
                   for name, home, feeds in SOURCES if name in OFFICIAL}
 OFFICIAL_HOSTS['AMD'].update({'amd.com','www.amd.com'})
-OFFICIAL_HOSTS['NVIDIA'].update({'nvidia.com','www.nvidia.com'})
+OFFICIAL_HOSTS['NVIDIA'].update({'nvidia.com','www.nvidia.com','blogs.nvidia.com'})
 OFFICIAL_HOSTS['CISA News'].update({'cisa.gov','www.cisa.gov'})
 
+def publisher_url(source, url):
+    return host_of(url) in OFFICIAL_HOSTS.get(source, set())
+
+
 def official_url(source, url, approved):
-    host = host_of(url)
-    return host is not None and host in approved and host in OFFICIAL_HOSTS.get(source, set())
+    return host_of(url) in approved and publisher_url(source, url)
+
+
+def official_candidates(rows):
+    """Expose first-party URLs for live review without copying article bodies."""
+    candidates = (row for row in rows if publisher_url(row["source"], row["url"]))
+    fields = ("source", "title", "url", "published_utc", "topics", "score")
+    return [{field: row[field] for field in fields}
+            for row in sorted(candidates, key=lambda row: (row["score"], row["published_utc"]), reverse=True)]
 
 def safe_url(url,hosts):
     return host_of(url) in hosts
@@ -291,7 +302,8 @@ def run(approved):
         "unique_candidates":len(rows),"filtered_candidates":len(rows)-len(eligible),
         "clusters":len(groups),"approved_article_hosts":sorted(approved),
         "official_texts_for_review":sum(r["article"]["status"]=="official_text_for_review" for r in shortlist),
-        "verified_articles":False,"publication_allowed":False,"shortlist":shortlist}
+        "verified_articles":False,"publication_allowed":False,"shortlist":shortlist,
+        "official_candidates":official_candidates(eligible)}
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     print("Coverage:",ok,"/",len(SOURCES),"Candidates:",len(rows),"Clusters:",len(groups),"Shortlist:",len(shortlist))
@@ -354,6 +366,15 @@ class Tests(unittest.TestCase):
         self.assertFalse(official_url("Android Developers Blog",url,set()))
         self.assertFalse(official_url("AMD",url,{"developer.android.com"}))
         self.assertFalse(official_url("Android Developers Blog","https://developer.android.com.evil.test/blog/example",{"developer.android.com"}))
+    def test_official_links_without_article_permission(self):
+        official = rank(dict(self.row, source="NVIDIA", url="https://blogs.nvidia.com/blog/example/"), self.now)
+        mirror = dict(official, source="Ars Technica")
+        candidates = official_candidates([mirror, dict(official, _rss_body="not for export")])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["url"], official["url"])
+        self.assertNotIn("_rss_body", candidates[0])
+        self.assertFalse(official_url("NVIDIA", official["url"], set()))
+
     def test_no_permission(self):
         with patch(__name__+".fetch_html") as f:
             self.assertEqual(extract(self.row,set())["status"],"not_approved")
