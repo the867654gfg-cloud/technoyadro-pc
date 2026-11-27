@@ -1,7 +1,7 @@
 name: TechnoYadro News Engine 2.0 (pilot)
 on:
   schedule:
-    - cron: '37 * * * *'
+    - cron: '7,37 * * * *'
   push:
     branches: [main]
     paths:
