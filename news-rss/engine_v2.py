@@ -14,7 +14,11 @@ from pathlib import Path
 from unittest.mock import patch
 import collector as base
 
-SOURCES = base.SOURCES + [
+SOURCES = [
+    (name, "https://developer.android.com/blog/", ["https://developer.android.com/static/blog/atom.xml"])
+    if name == "Android Developers Blog" else (name, home, feeds)
+    for name, home, feeds in base.SOURCES
+] + [
     ("Tom's Hardware", "https://www.tomshardware.com/", ["https://www.tomshardware.com/feeds/all"]),
 ]
 OFFICIAL = {"AMD","NVIDIA","Microsoft","Samsung Mobile","CISA News","USB-IF","Android Developers Blog"}
@@ -343,6 +347,13 @@ class Tests(unittest.TestCase):
         for u in ("http://www.amd.com/a","https://www.amd.com.evil.test/a","https://www.amd.com:123/a","https://user@www.amd.com/a"):
             self.assertFalse(safe_url(u,hosts))
         self.assertTrue(safe_url(self.row["url"],hosts))
+    def test_android_blog_migration_requires_approval(self):
+        url="https://developer.android.com/blog/example"
+        self.assertIn("developer.android.com",KNOWN_HOSTS)
+        self.assertTrue(official_url("Android Developers Blog",url,{"developer.android.com"}))
+        self.assertFalse(official_url("Android Developers Blog",url,set()))
+        self.assertFalse(official_url("AMD",url,{"developer.android.com"}))
+        self.assertFalse(official_url("Android Developers Blog","https://developer.android.com.evil.test/blog/example",{"developer.android.com"}))
     def test_no_permission(self):
         with patch(__name__+".fetch_html") as f:
             self.assertEqual(extract(self.row,set())["status"],"not_approved")
