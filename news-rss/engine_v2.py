@@ -219,6 +219,14 @@ def official_candidates(rows):
     return [{field: row[field] for field in fields}
             for row in sorted(candidates, key=lambda row: (row["score"], row["published_utc"]), reverse=True)]
 
+def research_candidates(rows):
+    """Retain research leads even when general shortlist ranking is crowded."""
+    fields = ("source", "title", "url", "published_utc", "topics", "score")
+    candidates = [r for r in rows if ("research_tech" in r["topics"] or "ai" in r["topics"]
+                   or r["source"] in METADATA_ONLY)]
+    return [{field: r[field] for field in fields}
+            for r in sorted(candidates, key=lambda r: (r["published_utc"], r["score"]), reverse=True)[:100]]
+
 def safe_url(url,hosts):
     return host_of(url) in hosts
 
@@ -414,6 +422,7 @@ def run(approved):
         "official_texts_for_review":sum(r["article"]["status"]=="official_text_for_review" for r in shortlist),
         "verified_articles":False,"publication_allowed":False,"shortlist":shortlist,
         "official_candidates":official_candidates(eligible),
+        "research_candidates":research_candidates(eligible),
         "official_dated_candidates":sorted(dated, key=lambda row: row["published_date"], reverse=True)}
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -426,6 +435,8 @@ def run(approved):
         "total_sources": len(reports),
         "official_candidates": result["official_candidates"][:30],
         "official_dated_candidates": result["official_dated_candidates"][:20],
+        "research_candidates": result["research_candidates"][:30],
+        "research_source_status": [{"source": r["source"], "status": r["status"], "fresh": r.get("fresh")} for r in reports if r["source"] in METADATA_ONLY],
     }
     print("TECHNOYADRO_OFFICIAL_METADATA " + json.dumps(metadata, ensure_ascii=True, separators=(",", ":")))
     if rss_ok<10: raise SystemExit(f"Insufficient RSS coverage: {rss_ok}/10 required")
@@ -444,6 +455,13 @@ class Tests(unittest.TestCase):
         rows,_=enriched_parse(raw,"MIT News AI","https://news.mit.edu/",self.now,{"news.mit.edu"})
         self.assertEqual(rows[0]["rss_excerpt"],"")
         self.assertNotIn("_rss_body",rows[0])
+    def test_research_candidates_beyond_shortlist(self):
+        row=rank(dict(self.row,source="MIT News Quantum",title="Quantum computer uses new qubits",
+                      url="https://news.mit.edu/2026/example"),self.now)
+        result=research_candidates([row])
+        self.assertEqual(len(result),1)
+        self.assertNotIn("rss_excerpt",result[0])
+        self.assertNotIn("publication_allowed",result[0])
     def test_rank(self):
         r=rank(self.row,self.now)
         self.assertGreaterEqual(r["score"],80)
