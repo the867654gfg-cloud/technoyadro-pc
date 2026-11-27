@@ -400,6 +400,16 @@ def run(approved):
     Path("rss-output").mkdir(exist_ok=True)
     Path("rss-output/news-v2.json").write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     print("Coverage:",ok,"/",len(reports),"Candidates:",len(rows),"Clusters:",len(groups),"Shortlist:",len(shortlist))
+    # Provide only first-party link metadata for readers unable to open the ZIP.
+    metadata = {
+        "schema_version": 2,
+        "collected_utc": result["collected_utc"],
+        "successful_sources": ok,
+        "total_sources": len(reports),
+        "official_candidates": result["official_candidates"][:30],
+        "official_dated_candidates": result["official_dated_candidates"][:20],
+    }
+    print("TECHNOYADRO_OFFICIAL_METADATA " + json.dumps(metadata, ensure_ascii=True, separators=(",", ":")))
     if rss_ok<10: raise SystemExit(f"Insufficient RSS coverage: {rss_ok}/10 required")
 
 class Tests(unittest.TestCase):
