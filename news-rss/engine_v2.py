@@ -31,6 +31,17 @@ SOURCES = [
     ("Raspberry Pi", "https://www.raspberrypi.com/news/", ["https://www.raspberrypi.com/news/feed/"]),
     ("GitHub Changelog", "https://github.blog/changelog/", ["https://github.blog/changelog/feed/"]),
 ]
+# Research feeds export only title, URL and publication metadata.
+RESEARCH_FEEDS = [
+    ("MIT News AI", "https://news.mit.edu/topic/artificial-intelligence2", ["https://news.mit.edu/rss/topic/artificial-intelligence2"]),
+    ("MIT News Robotics", "https://news.mit.edu/topic/robotics", ["https://news.mit.edu/rss/topic/robotics"]),
+    ("MIT News Quantum", "https://news.mit.edu/topic/quantum-computing", ["https://news.mit.edu/rss/topic/quantum-computing"]),
+    ("Google DeepMind", "https://deepmind.google/discover/blog/", ["https://deepmind.google/blog/rss.xml"]),
+    ("Nature Machine Intelligence", "https://www.nature.com/natmachintell/", ["https://www.nature.com/natmachintell.rss"]),
+    ("IEEE Spectrum", "https://spectrum.ieee.org/", ["https://spectrum.ieee.org/feeds/feed.rss"]),
+]
+METADATA_ONLY = {name for name, _, _ in RESEARCH_FEEDS}
+SOURCES += RESEARCH_FEEDS
 NEWSROOMS = {
     "Anthropic": "https://www.anthropic.com/news",
     "Apple Newsroom": "https://www.apple.com/newsroom/archive/",
@@ -40,13 +51,15 @@ OFFICIAL = {
     "AMD", "NVIDIA", "Microsoft", "Samsung Mobile", "CISA News", "USB-IF",
     "Android Developers Blog", "OpenAI", "Google AI", "NVIDIA Blog",
     "Raspberry Pi", "GitHub Changelog", *NEWSROOMS,
+    "MIT News AI", "MIT News Robotics", "MIT News Quantum", "Google DeepMind",
 }
 TOPICS = {
     "hardware": r"\b(cpu|gpu|ryzen|radeon|geforce|intel|nvidia|amd|ssd|nvme|ddr[456]|motherboard|processor|graphics|memory|chipset|pcie|ram|raspberry pi|iphone|ipad|macbook)\b",
     "security": r"\b(cve-\d{4}-\d+|vulnerability|vulnerabilities|ransomware|malware|security|exploit|patch)\b",
     "software": r"\b(windows|linux|kernel|driver|firmware|uefi|bios|mesa|android|macos|ios|github|update)\b",
     "engineering": r"\b(usb|pcie|pci express|semiconductor|transistor|power delivery|cooling|architecture|chip|silicon)\b",
-    "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm|chatgpt|gpt[- ]?\d+|codex|claude|gemini|copilot)\b",
+    "ai": r"\b(ai|llm|inference|machine learning|accelerator|cuda|rocm|chatgpt|gpt[- ]?\d+|codex|claude|gemini|copilot|neural networks?|deep learning|foundation models?|ai agents?|language models?|generative ai|multimodal)\b",
+    "research_tech": r"\b(robotics|robots?|humanoid|quantum (computing|computer|processor|chip|technology|error correction)|qubits?|photonics|spintronics|nanotechnology|nanoelectronics|neuromorphic|superconductors?|semiconductors?|microelectronics|optoelectronics|photonic chips?|solid-state batteries|fusion energy|perovskite solar cells)\b",
 }
 RUMOR = re.compile(r"\b(rumou?rs?|leaks?|leaked|reportedly|unconfirmed|alleged|speculation|purported|report claims)\b",re.I)
 AD = re.compile(r"\b(sponsored|advertorial|affiliate|deal[s]?|discount|coupon|black friday|cyber monday|giveaway|price index|lowest prices?|all-time low|for just\s+\$|gift guide|best deals)\b|\bsave\s+\d+\s*%|\b\d+\s*%\s+off\b|\b(?:for just|at)\s+\$\d",re.I)
@@ -104,6 +117,10 @@ def rss_body(entry):
 def enriched_parse(data,source,base_url,now,approved=None,parse=None):
     rows,unknown=(parse or base.parse)(data,source,base_url,now)
     approved=approved or set()
+    if source in METADATA_ONLY:
+        for row in rows:
+            row["rss_excerpt"] = ""
+        return rows,unknown
     import xml.etree.ElementTree as ET
     notes={}
     for e in ET.fromstring(data).iter():
@@ -182,6 +199,7 @@ KNOWN_HOSTS.discard(None)
 OFFICIAL_HOSTS = {name: {host_of(home), *(host_of(u) for u in feeds)}
                   for name, home, feeds in SOURCES if name in OFFICIAL}
 OFFICIAL_HOSTS.update({name: {host_of(url)} for name, url in NEWSROOMS.items()})
+OFFICIAL_HOSTS['Google DeepMind'].update({'deepmind.google','deepmind.com','www.deepmind.com'})
 OFFICIAL_HOSTS['AMD'].update({'amd.com','www.amd.com'})
 OFFICIAL_HOSTS['NVIDIA'].update({'nvidia.com','www.nvidia.com','blogs.nvidia.com'})
 OFFICIAL_HOSTS['CISA News'].update({'cisa.gov','www.cisa.gov'})
@@ -191,7 +209,7 @@ def publisher_url(source, url):
 
 
 def official_url(source, url, approved):
-    return host_of(url) in approved and publisher_url(source, url)
+    return source not in METADATA_ONLY and host_of(url) in approved and publisher_url(source, url)
 
 
 def official_candidates(rows):
@@ -416,6 +434,16 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.now=dt.datetime(2026,11,26,12,tzinfo=base.UTC)
         self.row={"source":"AMD","title":"AMD releases Ryzen CPU security patch","url":"https://www.amd.com/test","published_utc":self.now.isoformat(),"rss_excerpt":""}
+    def test_research_topics_and_metadata_only(self):
+        for headline in ("Quantum computer uses new qubits", "Humanoid robots learn new skills", "Neural networks improve photonics"):
+            self.assertTrue(classify(headline))
+        url="https://news.mit.edu/2026/example"
+        self.assertTrue(publisher_url("MIT News AI",url))
+        self.assertFalse(official_url("MIT News AI",url,{"news.mit.edu"}))
+        raw=b'<rss><channel><item><title>Quantum computer</title><link>https://news.mit.edu/2026/example</link><pubDate>Thu, 26 Nov 2026 11:00:00 GMT</pubDate><description>Not exported</description></item></channel></rss>'
+        rows,_=enriched_parse(raw,"MIT News AI","https://news.mit.edu/",self.now,{"news.mit.edu"})
+        self.assertEqual(rows[0]["rss_excerpt"],"")
+        self.assertNotIn("_rss_body",rows[0])
     def test_rank(self):
         r=rank(self.row,self.now)
         self.assertGreaterEqual(r["score"],80)
