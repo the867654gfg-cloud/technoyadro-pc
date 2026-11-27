@@ -68,7 +68,7 @@ jobs:
               f.write('skip=' + str(fresh).lower() + '\n')
           print('Fresh primary run within 45 minutes:', fresh)
           PY
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         if: steps.freshness.outputs.skip != 'true'
         with:
           persist-credentials: false
@@ -87,7 +87,7 @@ jobs:
         run: python3 news-rss/engine_v2.py
       - name: Upload short-lived evidence
         if: steps.freshness.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: technoyadro-news-v2
           path: rss-output/news-v2.json
